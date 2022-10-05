@@ -45,7 +45,7 @@ prometheus:
         effect: NoSchedule
 
     nodeSelector:
-      eks.amazonaws.com/nodegroup: PrometheusSmall
+      eks.amazonaws.com/nodegroup: ${PROMETHEUS-SIZE}
 
     affinity:
       podAntiAffinity:
