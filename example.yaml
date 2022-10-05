@@ -45,7 +45,7 @@ prometheus:
         effect: NoSchedule
 
     nodeSelector:
-      eks.amazonaws.com/nodegroup: ${PROMETHEUS-SIZE}
+      eks.amazonaws.com/nodegroup: Prometheus${NODE-SIZE}
 
     affinity:
       podAntiAffinity:
@@ -63,11 +63,11 @@ prometheus:
     # Prometheus resources
     resources:
       requests:
-        cpu: 1
-        memory: 20Gi
+        cpu: ${REQUESTS-CPU}
+        memory: ${REQUESTS-MEMORY}
       limits:
-        cpu: 2
-        memory: 40Gi
+        cpu: ${LIMITS-CPU}
+        memory: ${LIMITS-MEMORY}
     persistentVolume:
       size: 60Gi
 
@@ -121,7 +121,7 @@ prometheus:
           min_backoff: 1s
           max_backoff: 1024s
 
-    retention: "8h"
+    retention: "2h"
     # Prometheus write configs - end
 
   # Prometheus scrape configs - start
@@ -145,6 +145,9 @@ prometheus:
                 - name: tag:Metrics
                   values:
                     - prometheus
+                # - name: tag:Product
+                #   values:
+                #     ${TAGS}
           relabel_configs:
             - source_labels: [__meta_ec2_instance_id]
               target_label: instance
