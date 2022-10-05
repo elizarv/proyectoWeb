@@ -1,0 +1,298 @@
+ Default values could be found at https://artifacthub.io/packages/helm/prometheus-community/prometheus
+prometheus:
+  alertmanager:
+    enabled: false
+  kubeStateMetrics:
+    enabled: false
+  nodeExporter:
+    enabled: false
+  pushgateway:
+    enabled: false
+
+  configmapReload:
+    prometheus:
+      enabled: true
+      name: configmap-reload
+      image:
+        repository: public.ecr.aws/n0a0a3c3/eks-images/configmap-reload
+        tag: v0.5.0arm64
+        pullPolicy: IfNotPresent
+
+   Necessary config for AWS Managed Prometheus (AMP)
+  serviceAccounts:
+    server:
+       Just need to be true in bootstrap
+      create: false
+      name: amp-iamproxy-ingest-service-account
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::053131491888:role/amp-iamproxy-ingest-role
+
+  server:
+    image:
+      repository: public.ecr.aws/n0a0a3c3/eks-images/prometheus
+      tag: v2.38.0arm64
+      pullPolicy: IfNotPresent
+
+    readinessProbeInitialDelay: 60
+    readinessProbeFailureThreshold: 10
+    podAnnotations:
+      sidecar.istio.io/inject: "false"
+
+     Affinity configs - start
+    tolerations:
+      - key: monitoring-prometheus
+        operator: Exists
+        effect: NoSchedule
+
+    nodeSelector:
+      eks.amazonaws.com/nodegroup: PrometheusLarge
+
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  statefulset.kubernetes.io/pod-name: prometheus-ec2-product-example-server-0
+              namespaces:
+                - monitoring-prometheus
+              topologyKey: kubernetes.io/hostname
+     Affinity configs - end
+
+     Prometheus resources
+    resources:
+      requests:
+        cpu: ${REQUESTS-CPU}
+        memory: ${REQUESTS-MEMORY}
+      limits:
+        cpu: ${LIMITS-CPU}
+        memory: ${LIMITS-MEMORY}
+    persistentVolume:
+      size: 60Gi
+
+     Set Prometheus to work with persistent disk
+    statefulSet:
+      enabled: true
+
+     Necessary config for AWS Managed Prometheus (AMP)
+    sidecarContainers:
+      - name: aws-sigv4-proxy-sidecar
+        image: public.ecr.aws/n0a0a3c3/eks-images/aws-sigv4-proxy:1.5arm64
+        args:
+          - --name
+          - aps
+          - --region
+          - us-east-1
+          - --host
+          - aps-workspaces.us-east-1.amazonaws.com
+          - --port
+          - :8005
+        ports:
+          - name: aws-sigv4-proxy
+            containerPort: 8005
+
+     Additional Prometheus command line startup
+    extraFlags:
+      - log.level=debug
+      - web.enable-lifecycle
+
+     Prometheus write configs - start
+     For more information: https://prometheus.io/docs/prometheus/latest/configuration/configuration/
+    global:
+      scrape_interval: 30s
+      scrape_timeout: 15s
+      external_labels:
+         The values should be the same but unique between all VTEX Prometheis. That are used in Prometheus High Availability (HA) mode.
+         For more information: https://docs.aws.amazon.com/prometheus/latest/userguide/AMP-ingest-dedupe.html
+        cluster: prometheus-ec2-product-example
+        __replica__: prometheus-ec2-product-example
+
+    remoteWrite:
+       This Prometheus template uses AWS sigv4 proxy to authz the Prometheus at AWS. The side is at `sidecarContainers` in this file.
+       Necessary config for AWS Managed Prometheus (AMP)
+      - url: http://localhost:8005/workspaces/${WORKSPACE-JOURNEY-ID}/api/v1/remote_write
+        queue_config:
+          capacity: 6000
+          min_shards: 50
+          max_shards: 1000
+          max_samples_per_send: 2000
+          batch_send_deadline: 30s
+          min_backoff: 1s
+          max_backoff: 1024s
+
+    retention: "2h"
+     Prometheus write configs - end
+
+   Prometheus scrape configs - start
+  serverFiles:
+    prometheus.yml:
+      scrape_configs:
+        - job_name: prometheus
+          honor_labels: true
+          static_configs:
+            - targets:
+               - localhost:9090
+
+        - job_name: "dotnet"
+          scrape_timeout: 10s
+          scrape_interval: 30s
+          ec2_sd_configs:
+            - region: us-east-1
+              profile: arn:aws:iam::053131491888:role/Prometheus-exporter
+              port: 80
+              filters:
+                - name: tag:Metrics
+                  values:
+                    - prometheus
+                 - name: tag:Product
+                   values:
+                     - srv-janus-edge
+		    - srv-janusedge
+		    - Janus-nginx-edge
+		    - vtex-janusedge
+		    
+          relabel_configs:
+            - source_labels: [__meta_ec2_instance_id]
+              target_label: instance
+              action: replace
+            - source_labels: [__meta_ec2_availability_zone]
+              target_label: zone
+              action: replace
+            - source_labels: [__meta_ec2_tag_Owner]
+              target_label: owner
+            - source_labels: [__meta_ec2_tag_Squad]
+              target_label: squad
+            - source_labels: [__meta_ec2_tag_Product]
+              target_label: product
+            - source_labels: [__meta_ec2_tag_ApplicationName]
+              target_label: app_name
+            - source_labels: [__meta_ec2_tag_XP]
+              target_label: xp
+            - source_labels: [__meta_ec2_tag_Team]
+              target_label: team
+            - source_labels: [__meta_ec2_tag_Environment]
+              target_label: environment
+            - source_labels: [__meta_ec2_tag_KubernetesCluster]
+              target_label: kubernetes_cluster
+            - source_labels: [__meta_ec2_tag_Name]
+              target_label: name
+            - source_labels: [__meta_ec2_tag_Version]
+              target_label: version_tag
+            - source_labels: [__meta_ec2_private_ip]
+              target_label: private_ip
+            - source_labels: [__meta_ec2_instance_type]
+              target_label: instance_type
+            - source_labels: [__meta_ec2_instance_state]
+              target_label: instance_state
+            - source_labels: [__meta_ec2_instance_lifecycle]
+              target_label: instance_lifecycle
+            - source_labels: [__meta_ec2_tag_MetricsPath]
+              regex: (.+)
+              target_label: __metrics_path__
+            - action: replace
+              regex: ([^:]+)(?::\d+)?;(\d+)
+              replacement: $1:$2
+              source_labels:
+                - __address__
+                - __meta_ec2_tag_MetricsPort
+              target_label: __address__
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: "http_requests_per_account_total|otlp_entrypoint_activities_by_account_total"
+              action: drop
+
+        - job_name: "node_exporter"
+          honor_labels: true
+          scrape_timeout: 30s
+          ec2_sd_configs:
+            - region: us-east-1
+              profile: arn:aws:iam::053131491888:role/Prometheus-exporter
+              port: 9100
+          relabel_configs:
+            - source_labels: [__meta_ec2_platform]
+              regex: windows
+              action: drop
+            - source_labels: [__meta_ec2_instance_id]
+              target_label: instance
+              action: replace
+            - source_labels: [__meta_ec2_availability_zone]
+              target_label: zone
+              action: replace
+            - source_labels: [__meta_ec2_tag_Owner]
+              target_label: owner
+            - source_labels: [__meta_ec2_tag_Squad]
+              target_label: squad
+            - source_labels: [__meta_ec2_tag_Product]
+              target_label: product
+            - source_labels: [__meta_ec2_tag_ApplicationName]
+              target_label: app_name
+            - source_labels: [__meta_ec2_tag_XP]
+              target_label: xp
+            - source_labels: [__meta_ec2_tag_Team]
+              target_label: team
+            - source_labels: [__meta_ec2_tag_Environment]
+              target_label: environment
+            - source_labels: [__meta_ec2_tag_KubernetesCluster]
+              target_label: kubernetes_cluster
+            - source_labels: [__meta_ec2_tag_Name]
+              target_label: name
+            - source_labels: [__meta_ec2_tag_Version]
+              target_label: version_tag
+            - source_labels: [__meta_ec2_private_ip]
+              target_label: private_ip
+            - source_labels: [__meta_ec2_instance_type]
+              target_label: instance_type
+            - source_labels: [__meta_ec2_instance_state]
+              target_label: instance_state
+            - source_labels: [__meta_ec2_instance_lifecycle]
+              target_label: instance_lifecycle
+
+        - job_name: "windows_exporter"
+          honor_labels: true
+          scrape_timeout: 30s
+          ec2_sd_configs:
+            - region: us-east-1
+              port: 9182
+              profile: arn:aws:iam::053131491888:role/Prometheus-exporter
+              filters:
+                - name: platform
+                  values:
+                    - windows
+          relabel_configs:
+            - source_labels: [__meta_ec2_instance_id]
+              target_label: instance
+              action: replace
+            - source_labels: [__meta_ec2_availability_zone]
+              target_label: zone
+              action: replace
+            - source_labels: [__meta_ec2_tag_Owner]
+              target_label: owner
+            - source_labels: [__meta_ec2_tag_Squad]
+              target_label: squad
+            - source_labels: [__meta_ec2_tag_Product]
+              target_label: product
+            - source_labels: [__meta_ec2_tag_ApplicationName]
+              target_label: app_name
+            - source_labels: [__meta_ec2_tag_XP]
+              target_label: xp
+            - source_labels: [__meta_ec2_tag_Team]
+              target_label: team
+            - source_labels: [__meta_ec2_tag_Environment]
+              target_label: environment
+            - source_labels: [__meta_ec2_tag_KubernetesCluster]
+              target_label: kubernetes_cluster
+            - source_labels: [__meta_ec2_tag_Name]
+              target_label: name
+            - source_labels: [__meta_ec2_tag_Version]
+              target_label: version_tag
+            - source_labels: [__meta_ec2_private_ip]
+              target_label: private_ip
+            - source_labels: [__meta_ec2_instance_type]
+              target_label: instance_type
+            - source_labels: [__meta_ec2_instance_state]
+              target_label: instance_state
+            - source_labels: [__meta_ec2_instance_lifecycle]
+              target_label: instance_lifecycle
+
+   Prometheus scrape configs - end
