@@ -147,7 +147,7 @@ prometheus:
                     - prometheus
                 # - name: tag:Product
                 #   values:
-                #     ${TAGS}
+                #     ${TAG-NAMES}
           relabel_configs:
             - source_labels: [__meta_ec2_instance_id]
               target_label: instance
