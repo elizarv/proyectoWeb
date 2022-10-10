@@ -61,7 +61,7 @@ clusters:
     kind: helm
     namespace: monitoring-prometheus
     environments:
-    # - ${ENVIRONMENT-NAME}
+    - prometheus-ec2-traffic
     - prometheus-ec2-catalog
     - prometheus-ec2-logistics
     - prometheus-ec2-orders

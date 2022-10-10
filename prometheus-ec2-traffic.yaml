@@ -1,3 +1,4 @@
+# Default values could be found at https://artifacthub.io/packages/helm/prometheus-community/prometheus
 prometheus:
   alertmanager:
     enabled: false
@@ -8,50 +9,43 @@ prometheus:
   pushgateway:
     enabled: false
 
+  configmapReload:
+    prometheus:
+      enabled: true
+      name: configmap-reload
+      image:
+        repository: public.ecr.aws/n0a0a3c3/eks-images/configmap-reload
+        tag: v0.5.0arm64
+        pullPolicy: IfNotPresent
+
+  # Necessary config for AWS Managed Prometheus (AMP)
+  serviceAccounts:
+    server:
+      # Just need to be true in bootstrap
+      create: false
+      name: amp-iamproxy-ingest-service-account
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::053131491888:role/amp-iamproxy-ingest-role
+
   server:
     image:
       repository: public.ecr.aws/n0a0a3c3/eks-images/prometheus
-      tag: v2.37.0
+      tag: v2.38.0arm64
       pullPolicy: IfNotPresent
 
-    global:
-      scrape_interval: 1m
-      scrape_timeout: 15s
-      external_labels:
-        cluster: prometheus-ec2
-        app: d
-
-    remoteWrite:
-      - url: http://cortex-stable-nginx.cortex-stable/api/v1/push
-        headers:
-          X-Scope-OrgID: eks-robots-ec2-d
-        queue_config:
-          capacity: 6000
-          min_shards: 50
-          max_shards: 100
-          max_samples_per_send: 2000
-          batch_send_deadline: 30s
-          min_backoff: 1s
-          max_backoff: 1024s
-
-    resources:
-      requests:
-        cpu: 1
-        memory: 110Gi
-      limits:
-        cpu: 2
-        memory: 120Gi
-
-    statefulSet:
-      enabled: true
-
+    readinessProbeInitialDelay: 60
+    readinessProbeFailureThreshold: 10
     podAnnotations:
       sidecar.istio.io/inject: "false"
 
-    retention: "8h"
+    # Affinity configs - start
+    tolerations:
+      - key: monitoring-prometheus
+        operator: Exists
+        effect: NoSchedule
 
-    persistentVolume:
-      size: 60Gi
+    nodeSelector:
+      eks.amazonaws.com/nodegroup: PrometheusSmall
 
     affinity:
       podAntiAffinity:
@@ -60,19 +54,77 @@ prometheus:
             podAffinityTerm:
               labelSelector:
                 matchLabels:
-                  statefulset.kubernetes.io/pod-name: prometheus-ec2-d-server-0
+                  statefulset.kubernetes.io/pod-name: prometheus-ec2-traffic-server-0
               namespaces:
-                - monitoring
+                - monitoring-prometheus
               topologyKey: kubernetes.io/hostname
+    # Affinity configs - end
 
-    nodeSelector:
-      eks.amazonaws.com/nodegroup: ObservabilityLarge
+    # Prometheus resources
+    resources:
+      requests:
+        cpu: 1
+        memory: 20Gi
+      limits:
+        cpu: 2
+        memory: 40Gi
+    persistentVolume:
+      size: 60Gi
 
-    tolerations:
-      - key: monitoring
-        operator: Exists
-        effect: NoSchedule
+    # Set Prometheus to work with persistent disk
+    statefulSet:
+      enabled: true
 
+    # Necessary config for AWS Managed Prometheus (AMP)
+    sidecarContainers:
+      - name: aws-sigv4-proxy-sidecar
+        image: public.ecr.aws/n0a0a3c3/eks-images/aws-sigv4-proxy:1.5arm64
+        args:
+          - --name
+          - aps
+          - --region
+          - us-east-1
+          - --host
+          - aps-workspaces.us-east-1.amazonaws.com
+          - --port
+          - :8005
+        ports:
+          - name: aws-sigv4-proxy
+            containerPort: 8005
+
+    # Additional Prometheus command line startup
+    extraFlags:
+      - log.level=debug
+      - web.enable-lifecycle
+
+    # Prometheus write configs - start
+    # For more information: https://prometheus.io/docs/prometheus/latest/configuration/configuration/
+    global:
+      scrape_interval: 30s
+      scrape_timeout: 15s
+      external_labels:
+        # The values should be the same but unique between all VTEX Prometheis. That are used in Prometheus High Availability (HA) mode.
+        # For more information: https://docs.aws.amazon.com/prometheus/latest/userguide/AMP-ingest-dedupe.html
+        cluster: prometheus-ec2-traffic
+        __replica__: prometheus-ec2-traffic
+
+    remoteWrite:
+      # This Prometheus template uses AWS sigv4 proxy to authz the Prometheus at AWS. The side is at `sidecarContainers` in this file.
+      # Necessary config for AWS Managed Prometheus (AMP)
+      - url: http://localhost:8005/workspaces/ws-d7fdf991-01f2-48f9-b765-e46c43fc9f0c/api/v1/remote_write
+        queue_config:
+          capacity: 6000
+          min_shards: 50
+          max_shards: 1000
+          max_samples_per_send: 2000
+          batch_send_deadline: 30s
+          min_backoff: 1s
+          max_backoff: 1024s
+
+    retention: "2h"
+    # Prometheus write configs - end
+
+  # Prometheus scrape configs - start
   serverFiles:
     prometheus.yml:
       scrape_configs:
@@ -80,47 +132,29 @@ prometheus:
           honor_labels: true
           static_configs:
             - targets:
-                - localhost:9090
+               - localhost:9090
 
         - job_name: "dotnet"
-          honor_labels: true
           scrape_timeout: 10s
           scrape_interval: 30s
           ec2_sd_configs:
             - region: us-east-1
+              profile: arn:aws:iam::053131491888:role/Prometheus-exporter
               port: 80
               filters:
                 - name: tag:Metrics
                   values:
                     - prometheus
-                - name: availability-zone
-                  values:
-                    - us-east-1d
+                - name: tag:Product
+                  values: 
+                    - arquivos
+		    - srv-arquivos
+		    - filemanager
+		    
           relabel_configs:
             - source_labels: [__meta_ec2_instance_id]
               target_label: instance
               action: replace
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "arquivos|srv-arquivos|filemanager"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "checkout-instore|chk-app|checkout-ui|Checkout|srv-checkout|vtex-checkout|checkout"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "catalog|srv-catalog|vtex-catalog|vtex-catalog-indexer|vtex-catalog-admin|vtex-catalogadvisor-web-app|srv-portal|vtex-portal|portal|srv-portalv2|vtex-portalv2|srv-portalxml|vtex-portal-xmldata|Search|SearchV2|search|vtex-portal-search|srv-catalog-search|vtex-broadcaster-worker-app|vtex-broadcaster-web-app|vtex-sku-binding-worker-app|vtex-sku-binding-web-app|vtex-offer-manager"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "srv-janus-edge|srv-janusedge|Janus-nginx-edge|vtex-janusedge"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "janus|srv-janus-router|srv-janus"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "availability|Availability|srv-availability|vtex-availability|srv-logistics|vtex-logistics|logistics|Logistics|srv-logistics-ope-cap|srv-logistics-shp|srv-logistics-tms|vtex-log|lg"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "orders|order-management|srv-orders|srv-oms|vtex-oms-search|workflow|srv-workflow|vtex-workflow|srv-workflow-api|sno|srv-sno|srv-do|vtex-do"
-              action: drop
             - source_labels: [__meta_ec2_availability_zone]
               target_label: zone
               action: replace
@@ -172,35 +206,18 @@ prometheus:
           scrape_timeout: 30s
           ec2_sd_configs:
             - region: us-east-1
+              profile: arn:aws:iam::053131491888:role/Prometheus-exporter
               port: 9100
               filters:
-                - name: availability-zone
-                  values:
-                    - us-east-1d
+              - name: tag:Product
+                values: 
+                  - arquivos
+		    - srv-arquivos
+		    - filemanager
+		    
           relabel_configs:
             - source_labels: [__meta_ec2_platform]
               regex: windows
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "arquivos|srv-arquivos|filemanager"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "checkout-instore|chk-app|checkout-ui|Checkout|srv-checkout|vtex-checkout|checkout"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "catalog|srv-catalog|vtex-catalog|vtex-catalog-indexer|vtex-catalog-admin|vtex-catalogadvisor-web-app|srv-portal|vtex-portal|portal|srv-portalv2|vtex-portalv2|srv-portalxml|vtex-portal-xmldata|Search|SearchV2|search|vtex-portal-search|srv-catalog-search|vtex-broadcaster-worker-app|vtex-broadcaster-web-app|vtex-sku-binding-worker-app|vtex-sku-binding-web-app|vtex-offer-manager"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "srv-janus-edge|srv-janusedge|Janus-nginx-edge|vtex-janusedge"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "janus|srv-janus-router|srv-janus"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "availability|Availability|srv-availability|vtex-availability|srv-logistics|vtex-logistics|logistics|Logistics|srv-logistics-ope-cap|srv-logistics-shp|srv-logistics-tms|vtex-log|lg"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "orders|order-management|srv-orders|srv-oms|vtex-oms-search|workflow|srv-workflow|vtex-workflow|srv-workflow-api|sno|srv-sno|srv-do|vtex-do"
               action: drop
             - source_labels: [__meta_ec2_instance_id]
               target_label: instance
@@ -243,38 +260,21 @@ prometheus:
           ec2_sd_configs:
             - region: us-east-1
               port: 9182
+              profile: arn:aws:iam::053131491888:role/Prometheus-exporter
               filters:
-                - name: availability-zone
-                  values:
-                    - us-east-1d
                 - name: platform
                   values:
                     - windows
+                - name: tag:Product
+                  values:
+                    - arquivos
+		    - srv-arquivos
+		    - filemanager
+		    
           relabel_configs:
             - source_labels: [__meta_ec2_instance_id]
               target_label: instance
               action: replace
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "arquivos|srv-arquivos|filemanager"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "checkout-instore|chk-app|checkout-ui|Checkout|srv-checkout|vtex-checkout|checkout"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "catalog|srv-catalog|vtex-catalog|vtex-catalog-indexer|vtex-catalog-admin|vtex-catalogadvisor-web-app|srv-portal|vtex-portal|portal|srv-portalv2|vtex-portalv2|srv-portalxml|vtex-portal-xmldata|Search|SearchV2|search|vtex-portal-search|srv-catalog-search|vtex-broadcaster-worker-app|vtex-broadcaster-web-app|vtex-sku-binding-worker-app|vtex-sku-binding-web-app|vtex-offer-manager"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "srv-janus-edge|srv-janusedge|Janus-nginx-edge|vtex-janusedge"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "janus|srv-janus-router|srv-janus"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "availability|Availability|srv-availability|vtex-availability|srv-logistics|vtex-logistics|logistics|Logistics|srv-logistics-ope-cap|srv-logistics-shp|srv-logistics-tms|vtex-log|lg"
-              action: drop
-            - source_labels: [__meta_ec2_tag_Product]
-              regex: "orders|order-management|srv-orders|srv-oms|vtex-oms-search|workflow|srv-workflow|vtex-workflow|srv-workflow-api|sno|srv-sno|srv-do|vtex-do"
-              action: drop
             - source_labels: [__meta_ec2_availability_zone]
               target_label: zone
               action: replace
@@ -306,3 +306,5 @@ prometheus:
               target_label: instance_state
             - source_labels: [__meta_ec2_instance_lifecycle]
               target_label: instance_lifecycle
+
+  # Prometheus scrape configs - end
