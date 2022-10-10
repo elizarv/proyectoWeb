@@ -101,9 +101,9 @@ prometheus:
             - source_labels: [__meta_ec2_instance_id]
               target_label: instance
               action: replace
-            # - source_labels: [__meta_ec2_tag_Product]
-            #   regex: "${PRODUCT-TAGS}"
-            #   action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "payments|srv-gateway|srv-payments|Transaction-Indexer-Worker|srv-giftcard|vtex-giftcard"
+              action: drop
             - source_labels: [__meta_ec2_tag_Product]
               regex: "checkout-instore|chk-app|checkout-ui|Checkout|srv-checkout|vtex-checkout|checkout"
               action: drop
@@ -183,9 +183,9 @@ prometheus:
             - source_labels: [__meta_ec2_platform]
               regex: windows
               action: drop
-            # - source_labels: [__meta_ec2_tag_Product]
-            #   regex: "${PRODUCT-TAGS}"
-            #   action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "payments|srv-gateway|srv-payments|Transaction-Indexer-Worker|srv-giftcard|vtex-giftcard"
+              action: drop
             - source_labels: [__meta_ec2_tag_Product]
               regex: "checkout-instore|chk-app|checkout-ui|Checkout|srv-checkout|vtex-checkout|checkout"
               action: drop
@@ -257,9 +257,9 @@ prometheus:
             - source_labels: [__meta_ec2_instance_id]
               target_label: instance
               action: replace
-            # - source_labels: [__meta_ec2_tag_Product]
-            #   regex: "${PRODUCT-TAGS}"
-            #   action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "payments|srv-gateway|srv-payments|Transaction-Indexer-Worker|srv-giftcard|vtex-giftcard"
+              action: drop
             - source_labels: [__meta_ec2_tag_Product]
               regex: "checkout-instore|chk-app|checkout-ui|Checkout|srv-checkout|vtex-checkout|checkout"
               action: drop
