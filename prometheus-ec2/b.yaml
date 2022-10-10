@@ -1,0 +1,308 @@
+prometheus:
+  alertmanager:
+    enabled: false
+  kubeStateMetrics:
+    enabled: false
+  nodeExporter:
+    enabled: false
+  pushgateway:
+    enabled: false
+
+  server:
+    image:
+      repository: public.ecr.aws/n0a0a3c3/eks-images/prometheus
+      tag: v2.37.0
+      pullPolicy: IfNotPresent
+
+    global:
+      scrape_interval: 1m
+      scrape_timeout: 15s
+      external_labels:
+        cluster: prometheus-ec2
+        app: b
+
+    remoteWrite:
+      - url: http://cortex-stable-nginx.cortex-stable/api/v1/push
+        headers:
+          X-Scope-OrgID: eks-robots-ec2-b
+        queue_config:
+          capacity: 6000
+          min_shards: 50
+          max_shards: 100
+          max_samples_per_send: 2000
+          batch_send_deadline: 30s
+          min_backoff: 1s
+          max_backoff: 1024s
+
+    resources:
+      requests:
+        cpu: 1
+        memory: 110Gi
+      limits:
+        cpu: 2
+        memory: 120Gi
+
+    statefulSet:
+      enabled: true
+
+    podAnnotations:
+      sidecar.istio.io/inject: "false"
+
+    retention: "8h"
+
+    persistentVolume:
+      size: 60Gi
+
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  statefulset.kubernetes.io/pod-name: prometheus-ec2-b-server-0
+              namespaces:
+                - monitoring
+              topologyKey: kubernetes.io/hostname
+
+    nodeSelector:
+      eks.amazonaws.com/nodegroup: ObservabilityLarge
+
+    tolerations:
+      - key: monitoring
+        operator: Exists
+        effect: NoSchedule
+
+  serverFiles:
+    prometheus.yml:
+      scrape_configs:
+        - job_name: prometheus
+          honor_labels: true
+          static_configs:
+            - targets:
+                - localhost:9090
+
+        - job_name: "dotnet"
+          honor_labels: true
+          scrape_timeout: 10s
+          scrape_interval: 30s
+          ec2_sd_configs:
+            - region: us-east-1
+              port: 80
+              filters:
+                - name: tag:Metrics
+                  values:
+                    - prometheus
+                - name: availability-zone
+                  values:
+                    - us-east-1b
+          relabel_configs:
+            - source_labels: [__meta_ec2_instance_id]
+              target_label: instance
+              action: replace
+            # - source_labels: [__meta_ec2_tag_Product]
+            #   regex: "${PRODUCT-TAGS}"
+            #   action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "checkout-instore|chk-app|checkout-ui|Checkout|srv-checkout|vtex-checkout|checkout"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "catalog|srv-catalog|vtex-catalog|vtex-catalog-indexer|vtex-catalog-admin|vtex-catalogadvisor-web-app|srv-portal|vtex-portal|portal|srv-portalv2|vtex-portalv2|srv-portalxml|vtex-portal-xmldata|Search|SearchV2|search|vtex-portal-search|srv-catalog-search|vtex-broadcaster-worker-app|vtex-broadcaster-web-app|vtex-sku-binding-worker-app|vtex-sku-binding-web-app|vtex-offer-manager"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "srv-janus-edge|srv-janusedge|Janus-nginx-edge|vtex-janusedge"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "janus|srv-janus-router|srv-janus"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "availability|Availability|srv-availability|vtex-availability|srv-logistics|vtex-logistics|logistics|Logistics|srv-logistics-ope-cap|srv-logistics-shp|srv-logistics-tms|vtex-log|lg"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "orders|order-management|srv-orders|srv-oms|vtex-oms-search|workflow|srv-workflow|vtex-workflow|srv-workflow-api|sno|srv-sno|srv-do|vtex-do"
+              action: drop
+            - source_labels: [__meta_ec2_availability_zone]
+              target_label: zone
+              action: replace
+            - source_labels: [__meta_ec2_tag_Owner]
+              target_label: owner
+            - source_labels: [__meta_ec2_tag_Squad]
+              target_label: squad
+            - source_labels: [__meta_ec2_tag_Product]
+              target_label: product
+            - source_labels: [__meta_ec2_tag_ApplicationName]
+              target_label: app_name
+            - source_labels: [__meta_ec2_tag_XP]
+              target_label: xp
+            - source_labels: [__meta_ec2_tag_Team]
+              target_label: team
+            - source_labels: [__meta_ec2_tag_Environment]
+              target_label: environment
+            - source_labels: [__meta_ec2_tag_KubernetesCluster]
+              target_label: kubernetes_cluster
+            - source_labels: [__meta_ec2_tag_Name]
+              target_label: name
+            - source_labels: [__meta_ec2_tag_Version]
+              target_label: version_tag
+            - source_labels: [__meta_ec2_private_ip]
+              target_label: private_ip
+            - source_labels: [__meta_ec2_instance_type]
+              target_label: instance_type
+            - source_labels: [__meta_ec2_instance_state]
+              target_label: instance_state
+            - source_labels: [__meta_ec2_instance_lifecycle]
+              target_label: instance_lifecycle
+            - source_labels: [__meta_ec2_tag_MetricsPath]
+              regex: (.+)
+              target_label: __metrics_path__
+            - action: replace
+              regex: ([^:]+)(?::\d+)?;(\d+)
+              replacement: $1:$2
+              source_labels:
+                - __address__
+                - __meta_ec2_tag_MetricsPort
+              target_label: __address__
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: "http_requests_per_account_total|otlp_entrypoint_activities_by_account_total"
+              action: drop
+
+        - job_name: "node_exporter"
+          honor_labels: true
+          scrape_timeout: 30s
+          ec2_sd_configs:
+            - region: us-east-1
+              port: 9100
+              filters:
+                - name: availability-zone
+                  values:
+                    - us-east-1b
+          relabel_configs:
+            - source_labels: [__meta_ec2_platform]
+              regex: windows
+              action: drop
+            # - source_labels: [__meta_ec2_tag_Product]
+            #   regex: "${PRODUCT-TAGS}"
+            #   action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "checkout-instore|chk-app|checkout-ui|Checkout|srv-checkout|vtex-checkout|checkout"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "catalog|srv-catalog|vtex-catalog|vtex-catalog-indexer|vtex-catalog-admin|vtex-catalogadvisor-web-app|srv-portal|vtex-portal|portal|srv-portalv2|vtex-portalv2|srv-portalxml|vtex-portal-xmldata|Search|SearchV2|search|vtex-portal-search|srv-catalog-search|vtex-broadcaster-worker-app|vtex-broadcaster-web-app|vtex-sku-binding-worker-app|vtex-sku-binding-web-app|vtex-offer-manager"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "srv-janus-edge|srv-janusedge|Janus-nginx-edge|vtex-janusedge"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "janus|srv-janus-router|srv-janus"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "availability|Availability|srv-availability|vtex-availability|srv-logistics|vtex-logistics|logistics|Logistics|srv-logistics-ope-cap|srv-logistics-shp|srv-logistics-tms|vtex-log|lg"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "orders|order-management|srv-orders|srv-oms|vtex-oms-search|workflow|srv-workflow|vtex-workflow|srv-workflow-api|sno|srv-sno|srv-do|vtex-do"
+              action: drop
+            - source_labels: [__meta_ec2_instance_id]
+              target_label: instance
+              action: replace
+            - source_labels: [__meta_ec2_availability_zone]
+              target_label: zone
+              action: replace
+            - source_labels: [__meta_ec2_tag_Owner]
+              target_label: owner
+            - source_labels: [__meta_ec2_tag_Squad]
+              target_label: squad
+            - source_labels: [__meta_ec2_tag_Product]
+              target_label: product
+            - source_labels: [__meta_ec2_tag_ApplicationName]
+              target_label: app_name
+            - source_labels: [__meta_ec2_tag_XP]
+              target_label: xp
+            - source_labels: [__meta_ec2_tag_Team]
+              target_label: team
+            - source_labels: [__meta_ec2_tag_Environment]
+              target_label: environment
+            - source_labels: [__meta_ec2_tag_KubernetesCluster]
+              target_label: kubernetes_cluster
+            - source_labels: [__meta_ec2_tag_Name]
+              target_label: name
+            - source_labels: [__meta_ec2_tag_Version]
+              target_label: version_tag
+            - source_labels: [__meta_ec2_private_ip]
+              target_label: private_ip
+            - source_labels: [__meta_ec2_instance_type]
+              target_label: instance_type
+            - source_labels: [__meta_ec2_instance_state]
+              target_label: instance_state
+            - source_labels: [__meta_ec2_instance_lifecycle]
+              target_label: instance_lifecycle
+
+        - job_name: "windows_exporter"
+          honor_labels: true
+          scrape_timeout: 30s
+          ec2_sd_configs:
+            - region: us-east-1
+              port: 9182
+              filters:
+                - name: availability-zone
+                  values:
+                    - us-east-1b
+                - name: platform
+                  values:
+                    - windows
+          relabel_configs:
+            - source_labels: [__meta_ec2_instance_id]
+              target_label: instance
+              action: replace
+            # - source_labels: [__meta_ec2_tag_Product]
+            #   regex: "${PRODUCT-TAGS}"
+            #   action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "checkout-instore|chk-app|checkout-ui|Checkout|srv-checkout|vtex-checkout|checkout"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "catalog|srv-catalog|vtex-catalog|vtex-catalog-indexer|vtex-catalog-admin|vtex-catalogadvisor-web-app|srv-portal|vtex-portal|portal|srv-portalv2|vtex-portalv2|srv-portalxml|vtex-portal-xmldata|Search|SearchV2|search|vtex-portal-search|srv-catalog-search|vtex-broadcaster-worker-app|vtex-broadcaster-web-app|vtex-sku-binding-worker-app|vtex-sku-binding-web-app|vtex-offer-manager"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "srv-janus-edge|srv-janusedge|Janus-nginx-edge|vtex-janusedge"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "janus|srv-janus-router|srv-janus"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "availability|Availability|srv-availability|vtex-availability|srv-logistics|vtex-logistics|logistics|Logistics|srv-logistics-ope-cap|srv-logistics-shp|srv-logistics-tms|vtex-log|lg"
+              action: drop
+            - source_labels: [__meta_ec2_tag_Product]
+              regex: "orders|order-management|srv-orders|srv-oms|vtex-oms-search|workflow|srv-workflow|vtex-workflow|srv-workflow-api|sno|srv-sno|srv-do|vtex-do"
+              action: drop
+            - source_labels: [__meta_ec2_availability_zone]
+              target_label: zone
+              action: replace
+            - source_labels: [__meta_ec2_tag_Owner]
+              target_label: owner
+            - source_labels: [__meta_ec2_tag_Squad]
+              target_label: squad
+            - source_labels: [__meta_ec2_tag_Product]
+              target_label: product
+            - source_labels: [__meta_ec2_tag_ApplicationName]
+              target_label: app_name
+            - source_labels: [__meta_ec2_tag_XP]
+              target_label: xp
+            - source_labels: [__meta_ec2_tag_Team]
+              target_label: team
+            - source_labels: [__meta_ec2_tag_Environment]
+              target_label: environment
+            - source_labels: [__meta_ec2_tag_KubernetesCluster]
+              target_label: kubernetes_cluster
+            - source_labels: [__meta_ec2_tag_Name]
+              target_label: name
+            - source_labels: [__meta_ec2_tag_Version]
+              target_label: version_tag
+            - source_labels: [__meta_ec2_private_ip]
+              target_label: private_ip
+            - source_labels: [__meta_ec2_instance_type]
+              target_label: instance_type
+            - source_labels: [__meta_ec2_instance_state]
+              target_label: instance_state
+            - source_labels: [__meta_ec2_instance_lifecycle]
+              target_label: instance_lifecycle
